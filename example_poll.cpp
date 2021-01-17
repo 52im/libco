@@ -33,6 +33,11 @@
 #include <vector>
 #include <set>
 #include <unistd.h>
+
+#ifdef __FreeBSD__
+#include <cstring>
+#endif
+
 using namespace std;
 
 struct task_t
@@ -130,7 +135,7 @@ static void *poll_routine( void *arg )
 		int ret = poll( pf,iWaitCnt,1000 );
 		printf("co %p poll wait %ld ret %d\n",
 				co_self(),iWaitCnt,ret);
-		for(int i=0;i<ret;i++)
+		for(int i=0;i<(int)iWaitCnt;i++)
 		{
 			printf("co %p fire fd %d revents 0x%X POLLOUT 0x%X POLLERR 0x%X POLLHUP 0x%X\n",
 					co_self(),

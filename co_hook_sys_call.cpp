@@ -41,9 +41,11 @@
 #include <netdb.h>
 
 #include <time.h>
+#include <map>
 #include "co_routine.h"
 #include "co_routine_inner.h"
 #include "co_routine_specific.h"
+#include "co_comm.h"
 
 typedef long long ll64_t;
 
@@ -78,7 +80,7 @@ typedef ssize_t (*recvfrom_pfn_t)(int socket, void *buffer, size_t length,
 	                 int flags, struct sockaddr *address,
 					               socklen_t *address_len);
 
-typedef size_t (*send_pfn_t)(int socket, const void *buffer, size_t length, int flags);
+typedef ssize_t (*send_pfn_t)(int socket, const void *buffer, size_t length, int flags);
 typedef ssize_t (*recv_pfn_t)(int socket, void *buffer, size_t length, int flags);
 
 typedef int (*poll_pfn_t)(struct pollfd fds[], nfds_t nfds, int timeout);
@@ -97,6 +99,7 @@ typedef char *(*getenv_pfn_t)(const char *name);
 typedef hostent* (*gethostbyname_pfn_t)(const char *name);
 typedef res_state (*__res_state_pfn_t)();
 typedef int (*__poll_pfn_t)(struct pollfd fds[], nfds_t nfds, int timeout);
+typedef int (*gethostbyname_r_pfn_t)(const char* __restrict name, struct hostent* __restrict __result_buf, char* __restrict __buf, size_t __buflen, struct hostent** __restrict __result, int* __restrict __h_errnop);
 
 static socket_pfn_t g_sys_socket_func 	= (socket_pfn_t)dlsym(RTLD_NEXT,"socket");
 static connect_pfn_t g_sys_connect_func = (connect_pfn_t)dlsym(RTLD_NEXT,"connect");
@@ -123,6 +126,7 @@ static getenv_pfn_t g_sys_getenv_func   =  (getenv_pfn_t)dlsym(RTLD_NEXT,"getenv
 static __res_state_pfn_t g_sys___res_state_func  = (__res_state_pfn_t)dlsym(RTLD_NEXT,"__res_state");
 
 static gethostbyname_pfn_t g_sys_gethostbyname_func = (gethostbyname_pfn_t)dlsym(RTLD_NEXT, "gethostbyname");
+static gethostbyname_r_pfn_t g_sys_gethostbyname_r_func = (gethostbyname_r_pfn_t)dlsym(RTLD_NEXT, "gethostbyname_r");
 
 static __poll_pfn_t g_sys___poll_func = (__poll_pfn_t)dlsym(RTLD_NEXT, "__poll");
 
@@ -245,7 +249,6 @@ int co_accept( int fd, struct sockaddr *addr, socklen_t *len )
 	alloc_by_fd( cli );
 	return cli;
 }
-
 int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 {
 	HOOK_SYS_FUNC( connect );
@@ -255,26 +258,65 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 		return g_sys_connect_func(fd,address,address_len);
 	}
 
-	int ret = g_sys_connect_func(fd,address,address_len);
+	//1.sys call
+	int ret = g_sys_connect_func( fd,address,address_len );
 
-
-	if( address_len == sizeof(sockaddr_un))
-	{
-		const struct sockaddr_un *p = (const struct sockaddr_un *)address;
-		if( strstr( p->sun_path,"connagent_unix_domain_socket") ) ///tmp/connagent_unix_domain_socket
-		{
-		}
-	}
 	rpchook_t *lp = get_by_fd( fd );
-	if( lp )
+	if( !lp ) return ret;
+
+	if( sizeof(lp->dest) >= address_len )
 	{
-		if( sizeof(lp->dest) >= address_len )
+		 memcpy( &(lp->dest),address,(int)address_len );
+	}
+	if( O_NONBLOCK & lp->user_flag ) 
+	{
+		return ret;
+	}
+	
+	if (!(ret < 0 && errno == EINPROGRESS))
+	{
+		return ret;
+	}
+
+	//2.wait
+	int pollret = 0;
+	struct pollfd pf = { 0 };
+
+	for(int i=0;i<3;i++) //25s * 3 = 75s
+	{
+		memset( &pf,0,sizeof(pf) );
+		pf.fd = fd;
+		pf.events = ( POLLOUT | POLLERR | POLLHUP );
+
+		pollret = poll( &pf,1,25000 );
+
+		if( 1 == pollret  )
 		{
-			memcpy( &(lp->dest),address,(int)address_len );
+			break;
 		}
 	}
+
+	if( pf.revents & POLLOUT ) //connect succ
+	{
+    // 3.check getsockopt ret
+    int err = 0;
+    socklen_t errlen = sizeof(err);
+    ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+    if (ret < 0) {
+      return ret;
+    } else if (err != 0) {
+      errno = err;
+      return -1;
+    }
+    errno = 0;
+    return 0;
+  }
+
+  errno = ETIMEDOUT;
 	return ret;
 }
+
+
 int close(int fd)
 {
 	HOOK_SYS_FUNC( close );
@@ -345,6 +387,11 @@ ssize_t write( int fd, const void *buf, size_t nbyte )
 
 	ssize_t writeret = g_sys_write_func( fd,(const char*)buf + wrotelen,nbyte - wrotelen );
 
+	if (writeret == 0)
+	{
+		return writeret;
+	}
+
 	if( writeret > 0 )
 	{
 		wrotelen += writeret;	
@@ -364,6 +411,10 @@ ssize_t write( int fd, const void *buf, size_t nbyte )
 			break;
 		}
 		wrotelen += writeret ;
+	}
+	if (writeret <= 0 && wrotelen == 0)
+	{
+		return writeret;
 	}
 	return wrotelen;
 }
@@ -457,6 +508,10 @@ ssize_t send(int socket, const void *buffer, size_t length, int flags)
 				+ ( lp->write_timeout.tv_usec / 1000 );
 
 	ssize_t writeret = g_sys_send_func( socket,buffer,length,flags );
+	if (writeret == 0)
+	{
+		return writeret;
+	}
 
 	if( writeret > 0 )
 	{
@@ -478,7 +533,10 @@ ssize_t send(int socket, const void *buffer, size_t length, int flags)
 		}
 		wrotelen += writeret ;
 	}
-
+	if (writeret <= 0 && wrotelen == 0)
+	{
+		return writeret;
+	}
 	return wrotelen;
 }
 
@@ -517,17 +575,52 @@ ssize_t recv( int socket, void *buffer, size_t length, int flags )
 	
 }
 
+extern int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout, poll_pfn_t pollfunc);
+
 int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 {
-
 	HOOK_SYS_FUNC( poll );
 
-	if( !co_is_enable_sys_hook() )
-	{
-		return g_sys_poll_func( fds,nfds,timeout );
+	if (!co_is_enable_sys_hook() || timeout == 0) {
+		return g_sys_poll_func(fds, nfds, timeout);
+	}
+	pollfd *fds_merge = NULL;
+	nfds_t nfds_merge = 0;
+	std::map<int, int> m;  // fd --> idx
+	std::map<int, int>::iterator it;
+	if (nfds > 1) {
+		fds_merge = (pollfd *)malloc(sizeof(pollfd) * nfds);
+		for (size_t i = 0; i < nfds; i++) {
+			if ((it = m.find(fds[i].fd)) == m.end()) {
+				fds_merge[nfds_merge] = fds[i];
+				m[fds[i].fd] = nfds_merge;
+				nfds_merge++;
+			} else {
+				int j = it->second;
+				fds_merge[j].events |= fds[i].events;  // merge in j slot
+			}
+		}
 	}
 
-	return co_poll( co_get_epoll_ct(),fds,nfds,timeout );
+	int ret = 0;
+	if (nfds_merge == nfds || nfds == 1) {
+		ret = co_poll_inner(co_get_epoll_ct(), fds, nfds, timeout, g_sys_poll_func);
+	} else {
+		ret = co_poll_inner(co_get_epoll_ct(), fds_merge, nfds_merge, timeout,
+				g_sys_poll_func);
+		if (ret > 0) {
+			for (size_t i = 0; i < nfds; i++) {
+				it = m.find(fds[i].fd);
+				if (it != m.end()) {
+					int j = it->second;
+					fds[i].revents = fds_merge[j].revents & fds[i].events;
+				}
+			}
+		}
+	}
+	free(fds_merge);
+	return ret;
+
 
 }
 int setsockopt(int fd, int level, int option_name,
@@ -593,6 +686,9 @@ int fcntl(int fildes, int cmd, ...)
 		case F_GETFL:
 		{
 			ret = g_sys_fcntl_func( fildes,cmd );
+			if (lp && !(lp->user_flag & O_NONBLOCK)) {
+				ret = ret & (~O_NONBLOCK);
+			}
 			break;
 		}
 		case F_SETFL:
@@ -809,7 +905,7 @@ struct hostent *gethostbyname(const char *name)
 {
 	HOOK_SYS_FUNC( gethostbyname );
 
-#ifdef __APPLE__
+#if defined( __APPLE__ ) || defined( __FreeBSD__ )
 	return g_sys_gethostbyname_func( name );
 #else
 	if (!co_is_enable_sys_hook())
@@ -821,6 +917,39 @@ struct hostent *gethostbyname(const char *name)
 
 }
 
+int co_gethostbyname_r(const char* __restrict name,
+                       struct hostent* __restrict __result_buf,
+                       char* __restrict __buf, size_t __buflen,
+                       struct hostent** __restrict __result,
+                       int* __restrict __h_errnop) {
+  static __thread clsCoMutex* tls_leaky_dns_lock = NULL; 
+  if(tls_leaky_dns_lock == NULL) {
+    tls_leaky_dns_lock = new clsCoMutex();
+  }
+  clsSmartLock auto_lock(tls_leaky_dns_lock);
+  return g_sys_gethostbyname_r_func(name, __result_buf, __buf, __buflen,
+                                    __result, __h_errnop);
+}
+
+int gethostbyname_r(const char* __restrict name,
+                    struct hostent* __restrict __result_buf,
+                    char* __restrict __buf, size_t __buflen,
+                    struct hostent** __restrict __result,
+                    int* __restrict __h_errnop) {
+  HOOK_SYS_FUNC(gethostbyname_r);
+
+#if defined( __APPLE__ ) || defined( __FreeBSD__ )
+	return g_sys_gethostbyname_r_func( name );
+#else
+  if (!co_is_enable_sys_hook()) {
+    return g_sys_gethostbyname_r_func(name, __result_buf, __buf, __buflen,
+                                      __result, __h_errnop);
+  }
+
+  return co_gethostbyname_r(name, __result_buf, __buf, __buflen, __result,
+                            __h_errnop);
+#endif
+}
 
 struct res_state_wrap
 {
@@ -857,7 +986,7 @@ struct hostbuf_wrap
 
 CO_ROUTINE_SPECIFIC(hostbuf_wrap, __co_hostbuf_wrap);
 
-#ifndef __APPLE__
+#if !defined( __APPLE__ ) && !defined( __FreeBSD__ )
 struct hostent *co_gethostbyname(const char *name)
 {
 	if (!name)
@@ -899,7 +1028,7 @@ struct hostent *co_gethostbyname(const char *name)
 #endif
 
 
-void co_enable_hook_sys() //这函数必须在这里,否则本文件会被忽略！！！
+void co_enable_hook_sys() //杩欏嚱鏁板繀椤诲湪杩欓噷,鍚﹀垯鏈枃浠朵細琚拷鐣ワ紒锛侊紒
 {
 	stCoRoutine_t *co = GetCurrThreadCo();
 	if( co )
@@ -907,3 +1036,4 @@ void co_enable_hook_sys() //这函数必须在这里,否则本文件会被忽略！！！
 		co->cEnableSysHook = 1;
 	}
 }
+

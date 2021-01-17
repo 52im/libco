@@ -32,6 +32,14 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/wait.h>
+
+#ifdef __FreeBSD__
+#include <cstring>
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
 
 using namespace std;
 struct task_t
@@ -84,11 +92,12 @@ static void *readwrite_routine( void *arg )
 			{
 				ret = write( fd,buf,ret );
 			}
-			if( ret <= 0 )
+			if( ret > 0 || ( -1 == ret && EAGAIN == errno ) )
 			{
-				close( fd );
-				break;
+				continue;
 			}
+			close( fd );
+			break;
 		}
 
 	}
@@ -189,13 +198,24 @@ static int CreateTcpSocket(const unsigned short shPort /* = 0 */,const char *psz
 
 int main(int argc,char *argv[])
 {
+	if(argc<5){
+		printf("Usage:\n"
+               "example_echosvr [IP] [PORT] [TASK_COUNT] [PROCESS_COUNT]\n"
+               "example_echosvr [IP] [PORT] [TASK_COUNT] [PROCESS_COUNT] -d   # daemonize mode\n");
+		return -1;
+	}
 	const char *ip = argv[1];
 	int port = atoi( argv[2] );
 	int cnt = atoi( argv[3] );
 	int proccnt = atoi( argv[4] );
+	bool deamonize = argc >= 6 && strcmp(argv[5], "-d") == 0;
 
 	g_listen_fd = CreateTcpSocket( port,ip,true );
 	listen( g_listen_fd,1024 );
+	if(g_listen_fd==-1){
+		printf("Port %d is in use\n", port);
+		return -1;
+	}
 	printf("listen %d %s:%d\n",g_listen_fd,ip,port);
 
 	SetNonBlock( g_listen_fd );
@@ -229,6 +249,7 @@ int main(int argc,char *argv[])
 
 		exit(0);
 	}
+	if(!deamonize) wait(NULL);
 	return 0;
 }
 

@@ -1,7 +1,6 @@
-#Libco
+Libco
+===========
 Libco is a c/c++ coroutine library that is widely used in WeChat services. It has been running on tens of thousands of machines since 2013.
-
-Author: sunnyxu(sunnyxu@tencent.com), leiffyli(leiffyli@tencent.com), dengoswei@gmail.com(dengoswei@tencent.com), sarlmolchen(sarlmolchen@tencent.com)
 
 By linking with libco, you can easily transform synchronous back-end service into coroutine service. The coroutine service will provide out-standing concurrency compare to multi-thread approach. With the system hook, You can easily coding in synchronous way but asynchronous executed.
 
@@ -16,6 +15,8 @@ libco通过仅有的几个函数接口 co_create/co_resume/co_yield 再配合 co
 
 作者: sunnyxu(sunnyxu@tencent.com), leiffyli(leiffyli@tencent.com), dengoswei@gmail.com(dengoswei@tencent.com), sarlmolchen(sarlmolchen@tencent.com)
 
+PS: **近期将开源PaxosStore，敬请期待。**
+
 ### libco的特性
 - 无需侵入业务逻辑，把多进程、多线程服务改造成协程服务，并发能力得到百倍提升;
 - 支持CGI框架，轻松构建web服务(New);
@@ -26,3 +27,22 @@ libco通过仅有的几个函数接口 co_create/co_resume/co_yield 再配合 co
  * __thread的协程私有变量、协程间通信的协程信号量co_signal (New);
  * 语言级别的lambda实现，结合协程原地编写并执行后台异步任务 (New);
  * 基于epoll/kqueue实现的小而轻的网络框架，基于时间轮盘实现的高性能定时器;
+
+### Build
+
+```bash
+$ cd /path/to/libco
+$ make
+```
+
+or use cmake
+
+```bash
+$ cd /path/to/libco
+$ mkdir build
+$ cd build
+$ cmake ..
+$ make
+```
+
+

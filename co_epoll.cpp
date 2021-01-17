@@ -21,9 +21,8 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <string.h>
 
-#ifndef __APPLE__
+#if !defined( __APPLE__ ) && !defined( __FreeBSD__ )
 
 int	co_epoll_wait( int epfd,struct co_epoll_res *events,int maxevents,int timeout )
 {
@@ -238,7 +237,7 @@ int co_epoll_ctl( int epfd,int op,int fd,struct epoll_event * ev )
 	int ret = 0;
 	struct timespec t = { 0 };
 
-	printf("ptr->events 0x%X\n",ptr->events);
+	// printf("ptr->events 0x%X\n",ptr->events);
 
 	if( EPOLL_CTL_MOD == op )
 	{
@@ -255,7 +254,7 @@ int co_epoll_ctl( int epfd,int op,int fd,struct epoll_event * ev )
 			struct kevent kev = { 0 };
 			EV_SET( &kev,fd,EVFILT_WRITE,EV_DELETE,0,0,NULL );
 			ret = kevent( epfd, &kev,1, NULL,0, &t );
-			printf("delete write ret %d\n",ret );
+			// printf("delete write ret %d\n",ret );
 		}
 	}
 

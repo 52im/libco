@@ -22,17 +22,18 @@ struct stCoClosure_t
 {
 public:
 	virtual void exec() = 0;
+	virtual ~stCoClosure_t(){}
 };
 
 //1.base 
 //-- 1.1 comac_argc
 
 #define comac_get_args_cnt( ... ) comac_arg_n( __VA_ARGS__ )
-#define comac_arg_n( _1,_2,_3,_4,_5,_6,_7,N,...) N
+#define comac_arg_n( _0,_1,_2,_3,_4,_5,_6,_7,N,...) N
 #define comac_args_seqs() 7,6,5,4,3,2,1,0
 #define comac_join_1( x,y ) x##y
 
-#define comac_argc( ... ) comac_get_args_cnt( __VA_ARGS__,comac_args_seqs() )
+#define comac_argc( ... ) comac_get_args_cnt( 0,##__VA_ARGS__,comac_args_seqs() )
 #define comac_join( x,y) comac_join_1( x,y )
 
 //-- 1.2 repeat
@@ -47,7 +48,11 @@ public:
 #define repeat( n,fun,... ) comac_join( repeat_,n )( fun,__VA_ARGS__)
 
 //2.implement
+#if __cplusplus <= 199711L
 #define decl_typeof( i,a,... ) typedef typeof( a ) typeof_##a;
+#else
+#define decl_typeof( i,a,... ) typedef decltype( a ) typeof_##a;
+#endif
 #define impl_typeof( i,a,... ) typeof_##a & a;
 #define impl_typeof_cpy( i,a,... ) typeof_##a a;
 #define con_param_typeof( i,a,... ) typeof_##a & a##r,

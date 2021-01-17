@@ -26,7 +26,7 @@
 #include <time.h>
 #include <time.h>
 
-#ifndef __APPLE__
+#if !defined( __APPLE__ ) && !defined( __FreeBSD__ )
 
 #include <sys/epoll.h>
 
@@ -53,6 +53,9 @@ enum EPOLL_EVENTS
 
 	EPOLLERR = 0X008,
 	EPOLLHUP = 0X010,
+
+    EPOLLRDNORM = 0x40,
+    EPOLLWRNORM = 0x004,
 };
 #define EPOLL_CTL_ADD 1
 #define EPOLL_CTL_DEL 2
